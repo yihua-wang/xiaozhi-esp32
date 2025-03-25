@@ -34,6 +34,9 @@ static const char* const STATE_STRINGS[] = {
     "invalid_state"
 };
 
+Display* Application::display = nullptr;
+AudioCodec* Application::codec = nullptr;
+
 Application::Application() {
     event_group_ = xEventGroupCreate();
     background_task_ = new BackgroundTask(4096 * 8);
@@ -49,6 +52,11 @@ Application::Application() {
         .skip_unhandled_events = true
     };
     esp_timer_create(&clock_timer_args, &clock_timer_handle_);
+
+    // 物联网初始化，添加对 AI 可见设备
+    auto& thing_manager = iot::ThingManager::GetInstance();
+    thing_manager.AddThing(iot::CreateThing("Speaker"));
+    thing_manager.AddThing(iot::CreateThing("Screen"));
 }
 
 Application::~Application() {
@@ -64,7 +72,7 @@ Application::~Application() {
 
 void Application::CheckNewVersion() {
     auto& board = Board::GetInstance();
-    auto display = board.GetDisplay();
+
     // Check if there is a new firmware version available
     ota_.SetPostData(board.GetJson());
 
@@ -92,12 +100,12 @@ void Application::CheckNewVersion() {
             } while (GetDeviceState() != kDeviceStateIdle);
 
             // Use main task to do the upgrade, not cancelable
-            Schedule([this, display]() {
+            Schedule([this]() {
                 SetDeviceState(kDeviceStateUpgrading);
                 
-                display->SetIcon(FONT_AWESOME_DOWNLOAD);
+                this->display->SetIcon(FONT_AWESOME_DOWNLOAD);
                 std::string message = std::string(Lang::Strings::NEW_VERSION) + ota_.GetFirmwareVersion();
-                display->SetChatMessage("system", message.c_str());
+                this->display->SetChatMessage("system", message.c_str());
 
                 auto& board = Board::GetInstance();
                 board.SetPowerSaveMode(false);
@@ -105,7 +113,6 @@ void Application::CheckNewVersion() {
                 wake_word_detect_.StopDetection();
 #endif
                 // 预先关闭音频输出，避免升级过程有音频操作
-                auto codec = board.GetAudioCodec();
                 codec->EnableInput(false);
                 codec->EnableOutput(false);
                 {
@@ -117,14 +124,14 @@ void Application::CheckNewVersion() {
                 background_task_ = nullptr;
                 vTaskDelay(pdMS_TO_TICKS(1000));
 
-                ota_.StartUpgrade([display](int progress, size_t speed) {
+                ota_.StartUpgrade([this](int progress, size_t speed) {
                     char buffer[64];
                     snprintf(buffer, sizeof(buffer), "%d%% %zuKB/s", progress, speed / 1024);
-                    display->SetChatMessage("system", buffer);
+                    this->display->SetChatMessage("system", buffer);
                 });
 
                 // If upgrade success, the device will reboot and never reach here
-                display->SetStatus(Lang::Strings::UPGRADE_FAILED);
+                this->display->SetStatus(Lang::Strings::UPGRADE_FAILED);
                 ESP_LOGI(TAG, "Firmware upgrade failed...");
                 vTaskDelay(pdMS_TO_TICKS(3000));
                 Reboot();
@@ -136,7 +143,7 @@ void Application::CheckNewVersion() {
         // No new version, mark the current version as valid
         ota_.MarkCurrentVersionValid();
         std::string message = std::string(Lang::Strings::VERSION) + ota_.GetCurrentVersion();
-        display->ShowNotification(message.c_str());
+        this->display->ShowNotification(message.c_str());
     
         if (ota_.HasActivationCode()) {
             // Activation code is valid
@@ -154,7 +161,7 @@ void Application::CheckNewVersion() {
         }
 
         SetDeviceState(kDeviceStateIdle);
-        display->SetChatMessage("system", "");
+        this->display->SetChatMessage("system", "");
         PlaySound(Lang::Sounds::P3_SUCCESS);
         // Exit the loop if upgrade or idle
         break;
@@ -198,7 +205,6 @@ void Application::ShowActivationCode() {
 
 void Application::Alert(const char* status, const char* message, const char* emotion, const std::string_view& sound) {
     ESP_LOGW(TAG, "Alert %s: %s [%s]", status, message, emotion);
-    auto display = Board::GetInstance().GetDisplay();
     display->SetStatus(status);
     display->SetEmotion(emotion);
     display->SetChatMessage("system", message);
@@ -209,7 +215,6 @@ void Application::Alert(const char* status, const char* message, const char* emo
 
 void Application::DismissAlert() {
     if (device_state_ == kDeviceStateIdle) {
-        auto display = Board::GetInstance().GetDisplay();
         display->SetStatus(Lang::Strings::STANDBY);
         display->SetEmotion("neutral");
         display->SetChatMessage("system", "");
@@ -217,7 +222,6 @@ void Application::DismissAlert() {
 }
 
 void Application::PlaySound(const std::string_view& sound) {
-    auto codec = Board::GetInstance().GetAudioCodec();
     codec->EnableOutput(true);
     SetDecodeSampleRate(16000);
     const char* data = sound.data();
@@ -311,15 +315,15 @@ void Application::StopListening() {
     });
 }
 
-void Application::Start() {
+void Application::Start(AudioCodec* _audio_codec, Display* _display) {
     auto& board = Board::GetInstance();
     SetDeviceState(kDeviceStateStarting);
 
     /* Setup the display */
-    auto display = board.GetDisplay();
+    display = _display;
 
     /* Setup the audio codec */
-    auto codec = board.GetAudioCodec();
+    codec = _audio_codec;
     opus_decode_sample_rate_ = codec->output_sample_rate();
     opus_decoder_ = std::make_unique<OpusDecoderWrapper>(opus_decode_sample_rate_, 1);
     opus_encoder_ = std::make_unique<OpusEncoderWrapper>(16000, 1, OPUS_FRAME_DURATION_MS);
@@ -337,7 +341,7 @@ void Application::Start() {
         input_resampler_.Configure(codec->input_sample_rate(), 16000);
         reference_resampler_.Configure(codec->input_sample_rate(), 16000);
     }
-    codec->OnInputReady([this, codec]() {
+    codec->OnInputReady([this]() {
         BaseType_t higher_priority_task_woken = pdFALSE;
         xEventGroupSetBitsFromISR(event_group_, AUDIO_INPUT_READY_EVENT, &higher_priority_task_woken);
         return higher_priority_task_woken == pdTRUE;
@@ -376,11 +380,11 @@ void Application::Start() {
             audio_decode_queue_.emplace_back(std::move(data));
         }
     });
-    protocol_->OnAudioChannelOpened([this, codec, &board]() {
+    protocol_->OnAudioChannelOpened([this, &board]() {
         board.SetPowerSaveMode(false);
-        if (protocol_->server_sample_rate() != codec->output_sample_rate()) {
+        if (protocol_->server_sample_rate() != this->codec->output_sample_rate()) {
             ESP_LOGW(TAG, "Server sample rate %d does not match device output sample rate %d, resampling may cause distortion",
-                protocol_->server_sample_rate(), codec->output_sample_rate());
+                protocol_->server_sample_rate(), this->codec->output_sample_rate());
         }
         SetDecodeSampleRate(protocol_->server_sample_rate());
         auto& thing_manager = iot::ThingManager::GetInstance();
@@ -393,12 +397,11 @@ void Application::Start() {
     protocol_->OnAudioChannelClosed([this, &board]() {
         board.SetPowerSaveMode(true);
         Schedule([this]() {
-            auto display = Board::GetInstance().GetDisplay();
-            display->SetChatMessage("system", "");
+            this->display->SetChatMessage("system", "");
             SetDeviceState(kDeviceStateIdle);
         });
     });
-    protocol_->OnIncomingJson([this, display](const cJSON* root) {
+    protocol_->OnIncomingJson([this](const cJSON* root) {
         // Parse JSON data
         auto type = cJSON_GetObjectItem(root, "type");
         if (strcmp(type->valuestring, "tts") == 0) {
@@ -426,8 +429,8 @@ void Application::Start() {
                 auto text = cJSON_GetObjectItem(root, "text");
                 if (text != NULL) {
                     ESP_LOGI(TAG, "<< %s", text->valuestring);
-                    Schedule([this, display, message = std::string(text->valuestring)]() {
-                        display->SetChatMessage("assistant", message.c_str());
+                    Schedule([this, message = std::string(text->valuestring)]() {
+                        this->display->SetChatMessage("assistant", message.c_str());
                     });
                 }
             }
@@ -435,15 +438,15 @@ void Application::Start() {
             auto text = cJSON_GetObjectItem(root, "text");
             if (text != NULL) {
                 ESP_LOGI(TAG, ">> %s", text->valuestring);
-                Schedule([this, display, message = std::string(text->valuestring)]() {
-                    display->SetChatMessage("user", message.c_str());
+                Schedule([this, message = std::string(text->valuestring)]() {
+                    this->display->SetChatMessage("user", message.c_str());
                 });
             }
         } else if (strcmp(type->valuestring, "llm") == 0) {
             auto emotion = cJSON_GetObjectItem(root, "emotion");
             if (emotion != NULL) {
-                Schedule([this, display, emotion_str = std::string(emotion->valuestring)]() {
-                    display->SetEmotion(emotion_str.c_str());
+                Schedule([this, emotion_str = std::string(emotion->valuestring)]() {
+                    this->display->SetEmotion(emotion_str.c_str());
                 });
             }
         } else if (strcmp(type->valuestring, "iot") == 0) {
@@ -492,8 +495,6 @@ void Application::Start() {
                 } else {
                     voice_detected_ = false;
                 }
-                auto led = Board::GetInstance().GetLed();
-                led->OnStateChanged();
             });
         }
     });
@@ -554,7 +555,7 @@ void Application::OnClockTimer() {
                     time_t now = time(NULL);
                     char time_str[64];
                     strftime(time_str, sizeof(time_str), "%H:%M  ", localtime(&now));
-                    Board::GetInstance().GetDisplay()->SetStatus(time_str);
+                    this->display->SetStatus(time_str);
                 });
             }
         }
@@ -604,7 +605,6 @@ void Application::ResetDecoder() {
 
 void Application::OutputAudio() {
     auto now = std::chrono::steady_clock::now();
-    auto codec = Board::GetInstance().GetAudioCodec();
     const int max_silence_seconds = 10;
 
     std::unique_lock<std::mutex> lock(mutex_);
@@ -629,7 +629,7 @@ void Application::OutputAudio() {
     audio_decode_queue_.pop_front();
     lock.unlock();
 
-    background_task_->Schedule([this, codec, opus = std::move(opus)]() mutable {
+    background_task_->Schedule([this, opus = std::move(opus)]() mutable {
         if (aborted_) {
             return;
         }
@@ -640,19 +640,18 @@ void Application::OutputAudio() {
         }
 
         // Resample if the sample rate is different
-        if (opus_decode_sample_rate_ != codec->output_sample_rate()) {
+        if (opus_decode_sample_rate_ != this->codec->output_sample_rate()) {
             int target_size = output_resampler_.GetOutputSamples(pcm.size());
             std::vector<int16_t> resampled(target_size);
             output_resampler_.Process(pcm.data(), pcm.size(), resampled.data());
             pcm = std::move(resampled);
         }
         
-        codec->OutputData(pcm);
+        this->codec->OutputData(pcm);
     });
 }
 
 void Application::InputAudio() {
-    auto codec = Board::GetInstance().GetAudioCodec();
     std::vector<int16_t> data;
     if (!codec->InputData(data)) {
         return;
@@ -723,10 +722,7 @@ void Application::SetDeviceState(DeviceState state) {
     background_task_->WaitForCompletion();
 
     auto& board = Board::GetInstance();
-    auto codec = board.GetAudioCodec();
-    auto display = board.GetDisplay();
-    auto led = board.GetLed();
-    led->OnStateChanged();
+
     switch (state) {
         case kDeviceStateUnknown:
         case kDeviceStateIdle:
@@ -787,7 +783,6 @@ void Application::SetDecodeSampleRate(int sample_rate) {
     opus_decoder_.reset();
     opus_decoder_ = std::make_unique<OpusDecoderWrapper>(opus_decode_sample_rate_, 1);
 
-    auto codec = Board::GetInstance().GetAudioCodec();
     if (opus_decode_sample_rate_ != codec->output_sample_rate()) {
         ESP_LOGI(TAG, "Resampling audio from %d to %d", opus_decode_sample_rate_, codec->output_sample_rate());
         output_resampler_.Configure(opus_decode_sample_rate_, codec->output_sample_rate());

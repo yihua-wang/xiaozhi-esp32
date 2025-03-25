@@ -14,6 +14,8 @@
 #include <opus_decoder.h>
 #include <opus_resampler.h>
 
+#include "audio_codec.h"
+#include "display.h"
 #include "protocol.h"
 #include "ota.h"
 #include "background_task.h"
@@ -54,7 +56,7 @@ public:
     Application(const Application&) = delete;
     Application& operator=(const Application&) = delete;
 
-    void Start();
+    void Start(AudioCodec* _audio_codec, Display* _display);
     DeviceState GetDeviceState() const { return device_state_; }
     bool IsVoiceDetected() const { return voice_detected_; }
     void Schedule(std::function<void()> callback);
@@ -114,6 +116,11 @@ private:
     void CheckNewVersion();
     void ShowActivationCode();
     void OnClockTimer();
+public:
+    static Display* display;
+    static Display* GetDisplay() { return display; }
+    static AudioCodec* codec;
+    static AudioCodec* GetAudioCodec() { return codec; }
 };
 
 #endif // _APPLICATION_H_
