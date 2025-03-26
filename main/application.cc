@@ -1,7 +1,6 @@
 #include "application.h"
 #include "board.h"
 #include "display.h"
-#include "system_info.h"
 #include "ml307_ssl_transport.h"
 #include "audio_codec.h"
 #include "mqtt_protocol.h"
@@ -74,13 +73,13 @@ void Application::CheckNewVersion() {
     auto& board = Board::GetInstance();
 
     // Check if there is a new firmware version available
-    ota_.SetPostData(board.GetJson());
+    _version.SetPostData(board.GetJson());
 
     const int MAX_RETRY = 10;
     int retry_count = 0;
 
     while (true) {
-        if (!ota_.CheckVersion()) {
+        if (!_version.CheckVersion()) {
             retry_count++;
             if (retry_count >= MAX_RETRY) {
                 ESP_LOGE(TAG, "Too many retries, exit version check");
@@ -92,60 +91,9 @@ void Application::CheckNewVersion() {
         }
         retry_count = 0;
 
-        if (ota_.HasNewVersion()) {
-            Alert(Lang::Strings::OTA_UPGRADE, Lang::Strings::UPGRADING, "happy", Lang::Sounds::P3_UPGRADE);
-            // Wait for the chat state to be idle
-            do {
-                vTaskDelay(pdMS_TO_TICKS(3000));
-            } while (GetDeviceState() != kDeviceStateIdle);
-
-            // Use main task to do the upgrade, not cancelable
-            Schedule([this]() {
-                SetDeviceState(kDeviceStateUpgrading);
-                
-                this->display->SetIcon(FONT_AWESOME_DOWNLOAD);
-                std::string message = std::string(Lang::Strings::NEW_VERSION) + ota_.GetFirmwareVersion();
-                this->display->SetChatMessage("system", message.c_str());
-
-                auto& board = Board::GetInstance();
-                board.SetPowerSaveMode(false);
-#if CONFIG_USE_WAKE_WORD_DETECT
-                wake_word_detect_.StopDetection();
-#endif
-                // 预先关闭音频输出，避免升级过程有音频操作
-                codec->EnableInput(false);
-                codec->EnableOutput(false);
-                {
-                    std::lock_guard<std::mutex> lock(mutex_);
-                    audio_decode_queue_.clear();
-                }
-                background_task_->WaitForCompletion();
-                delete background_task_;
-                background_task_ = nullptr;
-                vTaskDelay(pdMS_TO_TICKS(1000));
-
-                ota_.StartUpgrade([this](int progress, size_t speed) {
-                    char buffer[64];
-                    snprintf(buffer, sizeof(buffer), "%d%% %zuKB/s", progress, speed / 1024);
-                    this->display->SetChatMessage("system", buffer);
-                });
-
-                // If upgrade success, the device will reboot and never reach here
-                this->display->SetStatus(Lang::Strings::UPGRADE_FAILED);
-                ESP_LOGI(TAG, "Firmware upgrade failed...");
-                vTaskDelay(pdMS_TO_TICKS(3000));
-                Reboot();
-            });
-
-            return;
-        }
-
-        // No new version, mark the current version as valid
-        ota_.MarkCurrentVersionValid();
-        std::string message = std::string(Lang::Strings::VERSION) + ota_.GetCurrentVersion();
-        this->display->ShowNotification(message.c_str());
+        vTaskDelay(pdMS_TO_TICKS(1000));
     
-        if (ota_.HasActivationCode()) {
+        if (_version.HasActivationCode()) {
             // Activation code is valid
             SetDeviceState(kDeviceStateActivating);
             ShowActivationCode();
@@ -169,8 +117,8 @@ void Application::CheckNewVersion() {
 }
 
 void Application::ShowActivationCode() {
-    auto& message = ota_.GetActivationMessage();
-    auto& code = ota_.GetActivationCode();
+    auto& message = _version.GetActivationMessage();
+    auto& code = _version.GetActivationCode();
 
     struct digit_sound {
         char digit;
@@ -463,12 +411,12 @@ void Application::Start(AudioCodec* _audio_codec, Display* _display) {
     protocol_->Start();
 
     // Check for new firmware version or get the MQTT broker address
-    ota_.SetCheckVersionUrl(CONFIG_OTA_VERSION_URL);
-    ota_.SetHeader("Device-Id", SystemInfo::GetMacAddress().c_str());
-    ota_.SetHeader("Client-Id", board.GetUuid());
-    ota_.SetHeader("Accept-Language", Lang::CODE);
+    _version.SetCheckVersionUrl(CONFIG_OTA_VERSION_URL);
+    _version.SetHeader("Device-Id", SystemInfo::GetMacAddress().c_str());
+    _version.SetHeader("Client-Id", board.GetUuid());
+    _version.SetHeader("Accept-Language", Lang::CODE);
     auto app_desc = esp_app_get_description();
-    ota_.SetHeader("User-Agent", std::string(BOARD_NAME "/") + app_desc->version);
+    _version.SetHeader("User-Agent", std::string(BOARD_NAME "/") + app_desc->version);
 
     xTaskCreate([](void* arg) {
         Application* app = (Application*)arg;
@@ -548,7 +496,7 @@ void Application::OnClockTimer() {
         ESP_LOGI(TAG, "Free internal: %u minimal internal: %u", free_sram, min_free_sram);
 
         // If we have synchronized server time, set the status to clock "HH:MM" if the device is idle
-        if (ota_.HasServerTime()) {
+        if (_version.HasServerTime()) {
             if (device_state_ == kDeviceStateIdle) {
                 Schedule([this]() {
                     // Set status to clock "HH:MM"

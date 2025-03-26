@@ -17,7 +17,7 @@
 #include "audio_codec.h"
 #include "display.h"
 #include "protocol.h"
-#include "ota.h"
+#include "version.h"
 #include "background_task.h"
 
 #if CONFIG_USE_WAKE_WORD_DETECT
@@ -83,7 +83,7 @@ private:
 #if CONFIG_USE_AUDIO_PROCESSOR
     AudioProcessor audio_processor_;
 #endif
-    Ota ota_;
+    Version _version;
     std::mutex mutex_;
     std::list<std::function<void()>> main_tasks_;
     std::unique_ptr<Protocol> protocol_;

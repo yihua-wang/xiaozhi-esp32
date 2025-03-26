@@ -50,14 +50,6 @@ void SystemReset::ResetNvsFlash() {
 
 void SystemReset::ResetToFactory() {
     ESP_LOGI(TAG, "Resetting to factory");
-    // Erase otadata partition
-    const esp_partition_t* partition = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_OTA, NULL);
-    if (partition == NULL) {
-        ESP_LOGE(TAG, "Failed to find otadata partition");
-        return;
-    }
-    esp_partition_erase_range(partition, 0, partition->size);
-    ESP_LOGI(TAG, "Erased otadata partition");
 
     // Reboot in 3 seconds
     RestartInSeconds(3);

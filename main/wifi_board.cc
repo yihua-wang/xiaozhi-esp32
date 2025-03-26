@@ -2,7 +2,6 @@
 
 #include "display.h"
 #include "application.h"
-#include "system_info.h"
 #include "font_awesome_symbols.h"
 #include "settings.h"
 #include "assets/lang_config.h"

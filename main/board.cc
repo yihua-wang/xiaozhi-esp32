@@ -1,10 +1,13 @@
 #include "board.h"
-#include "system_info.h"
 #include "settings.h"
 #include "assets/lang_config.h"
 
 #include <esp_log.h>
-#include <esp_ota_ops.h>
+#include <esp_flash.h>
+#include <esp_mac.h>
+#include <esp_system.h>
+#include <esp_partition.h>
+#include <esp_app_desc.h>
 #include <esp_chip_info.h>
 #include <esp_random.h>
 
@@ -75,9 +78,6 @@ std::string Board::GetJson() {
                     "size": 0x100000
                 }
             ],
-            "ota": {
-                "label": "ota_0"
-            },
             "board": {
                 ...
             }
@@ -131,14 +131,38 @@ std::string Board::GetJson() {
     json.pop_back(); // Remove the last comma
     json += "],";
 
-    json += "\"ota\":{";
-    auto ota_partition = esp_ota_get_running_partition();
-    json += "\"label\":\"" + std::string(ota_partition->label) + "\"";
-    json += "},";
-
     json += "\"board\":" + GetBoardJson();
 
     // Close the JSON object
     json += "}";
     return json;
+}
+
+size_t SystemInfo::GetFlashSize() {
+    uint32_t flash_size;
+    if (esp_flash_get_size(NULL, &flash_size) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to get flash size");
+        return 0;
+    }
+    return (size_t)flash_size;
+}
+
+size_t SystemInfo::GetMinimumFreeHeapSize() {
+    return esp_get_minimum_free_heap_size();
+}
+
+size_t SystemInfo::GetFreeHeapSize() {
+    return esp_get_free_heap_size();
+}
+
+std::string SystemInfo::GetMacAddress() {
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    char mac_str[18];
+    snprintf(mac_str, sizeof(mac_str), "%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    return std::string(mac_str);
+}
+
+std::string SystemInfo::GetChipModelName() {
+    return std::string(CONFIG_IDF_TARGET);
 }

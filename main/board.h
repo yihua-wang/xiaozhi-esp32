@@ -11,7 +11,17 @@
 #define BOARD_TYPE  "wifi-board"
 
 void* create_board();
-class AudioCodec;
+
+class SystemInfo
+{
+public:
+    static size_t GetFlashSize();
+    static size_t GetMinimumFreeHeapSize();
+    static size_t GetFreeHeapSize();
+    static std::string GetMacAddress();
+    static std::string GetChipModelName();
+};
+
 class Board {
 private:
     Board(const Board&) = delete; // 禁用拷贝构造函数
