@@ -9,6 +9,7 @@
 #include "wifi_board.h"
 #include "audio_codec.h"
 #include "no_audio_codec.h"
+#include "iot/thing_manager.h"
 #include "display.h"
 #include "application.h"
 
@@ -62,6 +63,13 @@ extern "C" void app_main(void)
                                           AUDIO_MIC_WS_PIN,
                                           AUDIO_MIC_SD_PIN);
     display = new DisplayPrint();
+    auto& board = Board::GetInstance();
+
+    auto& thing_manager = iot::ThingManager::GetInstance();
+    thing_manager.AddThing(iot::CreateThing("Speaker"));
+    thing_manager.AddThing(iot::CreateThing("Screen"));
+    thing_manager.AddThing(iot::CreateThing("Battery"));
+
     // Launch the application
     Application::GetInstance().Start(audio_codec, display);
     // The main thread will exit and release the stack memory

@@ -53,9 +53,9 @@ Application::Application() {
     esp_timer_create(&clock_timer_args, &clock_timer_handle_);
 
     // 物联网初始化，添加对 AI 可见设备
-    auto& thing_manager = iot::ThingManager::GetInstance();
-    thing_manager.AddThing(iot::CreateThing("Speaker"));
-    thing_manager.AddThing(iot::CreateThing("Screen"));
+    // auto& thing_manager = iot::ThingManager::GetInstance();
+    // thing_manager.AddThing(iot::CreateThing("Speaker"));
+    // thing_manager.AddThing(iot::CreateThing("Screen"));
 }
 
 Application::~Application() {
