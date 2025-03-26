@@ -1,6 +1,5 @@
 #include "websocket_protocol.h"
 #include "board.h"
-#include "system_info.h"
 #include "application.h"
 
 #include <cstring>
